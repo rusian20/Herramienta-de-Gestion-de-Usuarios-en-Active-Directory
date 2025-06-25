@@ -10,7 +10,7 @@ Este programa es una potente herramienta diseñada para simplificar y automatiza
 
 **Agregar Usuarios a Grupos de Seguridad:** Facilita la asignación de múltiples usuarios a grupos de seguridad de manera rápida y eficiente.
 
-**Mover Usuarios a Unidades Organizativas (OU): **Simplifica el proceso de mover grupos de usuarios dentro de Active Directory, ayudando a mantener una estructura organizativa clara y ordenada.
+**Mover Usuarios a Unidades Organizativas (OU):** Simplifica el proceso de mover grupos de usuarios dentro de Active Directory, ayudando a mantener una estructura organizativa clara y ordenada.
 
 **Cambiar UPN (User Principal Name):** Proporciona herramientas para actualizar la dirección de inicio de sesión de los usuarios con facilidad.
 
