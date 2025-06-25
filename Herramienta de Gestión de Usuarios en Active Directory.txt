@@ -46,8 +46,8 @@ function ValidateCredentials {
     # Establecer el dominio basado en el prefijo
     $domainPrefix = $usernameParts[0]
     $global:domain = switch ($domainPrefix) {
-        "NAC" { "nac.example.com" }
-        "LAT" { "lat.example.com" }
+        "CAN" { "can.example.com" }
+        "TAL" { "tal.example.com" }
         default { 
             Write-Host "Domain not recognized. Please use Domain\<Username>."
             return $false 
