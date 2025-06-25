@@ -1,0 +1,733 @@
+# Cargar bibliotecas necesarias para la interfaz gráfica
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Crear un Mutex para evitar múltiples instancias del programa
+$mutexName = "Global\MyUniqueApplicationMutex"
+$mutex = New-Object -TypeName System.Threading.Mutex -ArgumentList $false, $mutexName
+
+# Intentar adquirir el Mutex, si ya hay una instancia en ejecución, mostrar un mensaje y salir
+if (-not $mutex.WaitOne(0, $false)) {
+    [System.Windows.Forms.MessageBox]::Show("Another instance of this application is already running.", "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    exit
+}
+
+# Variables globales para el nombre de usuario y el dominio
+$global:currentUserName = $null
+$global:domain = $null
+$global:credentials = $null
+
+# Función para obtener credenciales del usuario
+function Get-DomainCredentials {
+    try {
+        # Solicita al usuario que ingrese sus credenciales
+        $global:credentials = Get-Credential -Message "Please enter your domain credentials (e.g., Domain\user)"
+        Write-Host "Credentials obtained."
+        return $global:credentials
+    } catch {
+        Write-Host "Error obtaining credentials: $_"
+        return $null
+    }
+}
+
+# Función para validar las credenciales ingresadas
+function ValidateCredentials {
+    param (
+        $credentials
+    )
+    
+    # Extraer dominio del nombre de usuario
+    $usernameParts = $credentials.Username -split '\\'
+    if ($usernameParts.Length -ne 2) {
+        Write-Host "Invalid username format. Please use <Domain>\<Username>"
+        return $false
+    }
+
+    # Establecer el dominio basado en el prefijo
+    $domainPrefix = $usernameParts[0]
+    $global:domain = switch ($domainPrefix) {
+        "NAC" { "nac.example.com" }
+        "LAT" { "lat.example.com" }
+        default { 
+            Write-Host "Domain not recognized. Please use Domain\<Username>."
+            return $false 
+        }
+    }
+
+    try {
+        # Intentar conectarse al directorio usando las credenciales proporcionadas
+        $directoryEntry = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$global:domain", $credentials.UserName, $credentials.GetNetworkCredential().Password)
+        if ($directoryEntry.SchemaClassName) {
+            Write-Host "Credentials valid for $global:domain"
+            return $true
+        }
+    } catch {
+        Write-Host "Invalid credentials for $global:domain $_"
+        return $false
+    }
+}
+
+# Función para centrar botones en un formulario
+function CenterButtons {
+    param (
+        $form,
+        $buttons
+    )
+    
+    # Redimensionar botones al cambiar el tamaño del formulario
+    $form.Add_Resize({
+        $buttons | ForEach-Object {
+            $_.Left = [Math]::Floor(($form.ClientSize.Width - $_.Width) / 2)
+        }
+    })
+
+    # Inicializar posiciones de los botones
+    $currentY = 50
+    $heightIncrement = 70
+    foreach ($button in $buttons) {
+        $button.Top = $currentY
+        $currentY += $heightIncrement
+    }
+}
+
+# Función que muestra el menú principal
+function ShowMainMenu {
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+
+    # Crear un nuevo formulario para el menú
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Main Menu - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(400, 580)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+    
+    # Minimizar y maximizar el tamaño del formulario
+    $form.MinimumSize = New-Object System.Drawing.Size(400, 580)
+    $form.MaximumSize = New-Object System.Drawing.Size(400, 580)
+
+    # Crear botones para las acciones del menú
+    $buttonADSGBulkUser = New-Object System.Windows.Forms.Button
+    $buttonADSGBulkUser.Size = New-Object System.Drawing.Size(200, 40)
+    $buttonADSGBulkUser.Text = "AD SG Bulk Users"
+    $buttonADSGBulkUser.BackColor = [System.Drawing.Color]::White
+    $buttonADSGBulkUser.Add_Click({ $form.Hide(); ShowADSGBulkUserWindow($form) })
+
+    $buttonMoveBulkUser = New-Object System.Windows.Forms.Button
+    $buttonMoveBulkUser.Size = New-Object System.Drawing.Size(200, 40)
+    $buttonMoveBulkUser.Text = "Move Bulk Users"
+    $buttonMoveBulkUser.BackColor = [System.Drawing.Color]::White
+    $buttonMoveBulkUser.Add_Click({ $form.Hide(); ShowMoveBulkUserWindow($form) })
+
+    $buttonChangeUPNBulkUser = New-Object System.Windows.Forms.Button
+    $buttonChangeUPNBulkUser.Size = New-Object System.Drawing.Size(200, 40)
+    $buttonChangeUPNBulkUser.Text = "Change UPN Bulk Users"
+    $buttonChangeUPNBulkUser.BackColor = [System.Drawing.Color]::White
+    $buttonChangeUPNBulkUser.Add_Click({ $form.Hide(); ShowChangeUPNBulkUserWindow($form) })
+
+    $buttonResetPWUBulkUser = New-Object System.Windows.Forms.Button
+    $buttonResetPWUBulkUser.Size = New-Object System.Drawing.Size(200, 40)
+    $buttonResetPWUBulkUser.Text = "Reset PW Bulk Users"
+    $buttonResetPWUBulkUser.BackColor = [System.Drawing.Color]::White
+    $buttonResetPWUBulkUser.Add_Click({ $form.Hide(); ShowResetPWUBulkUserWindow($form) })
+
+    $buttonAudits = New-Object System.Windows.Forms.Button
+    $buttonAudits.Size = New-Object System.Drawing.Size(200, 40)
+    $buttonAudits.Text = "Audits"
+    $buttonAudits.BackColor = [System.Drawing.Color]::White
+    $buttonAudits.Add_Click({ $form.Hide(); ShowAuditsWindow($form) })
+
+    $buttonGenerateCSV = New-Object System.Windows.Forms.Button
+    $buttonGenerateCSV.Size = New-Object System.Drawing.Size(200, 40)
+    $buttonGenerateCSV.Text = "Generate CSV to Provision folder DUO"
+    $buttonGenerateCSV.BackColor = [System.Drawing.Color]::White
+    $buttonGenerateCSV.Add_Click({ $form.Hide(); ShowGenerateCSVWindow($form) })
+
+    # Añadir un aviso de copyright (opcional)
+    $labelCopyright = New-Object System.Windows.Forms.Label
+    $labelCopyright.Text = "© Your Company Name"
+    $labelCopyright.Location = New-Object System.Drawing.Point(10, 530)
+    $labelCopyright.Size = New-Object System.Drawing.Size(480, 30)
+    $labelCopyright.ForeColor = [System.Drawing.Color]::White
+    $labelCopyright.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+
+    # Agrupar todos los botones y añadir al formulario
+    $buttons = @($buttonADSGBulkUser, $buttonMoveBulkUser, $buttonChangeUPNBulkUser, $buttonResetPWUBulkUser, $buttonAudits, $buttonGenerateCSV, $labelCopyright)
+    $form.Controls.AddRange($buttons)
+    CenterButtons -form $form -buttons $buttons
+
+    $form.ShowDialog()
+}
+
+# Funciones para las diversas ventanas de acción (ej. agregar usuarios, mover usuarios, etc.)
+
+function ShowMoveBulkUserWindow($menuForm) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Move Bulk Users - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(530, 600)
+    $form.MinimumSize = New-Object System.Drawing.Size(530, 600)
+    $form.MaximumSize = New-Object System.Drawing.Size(530, 600)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $buttonBack = New-Object System.Windows.Forms.Button
+    $buttonBack.Location = New-Object System.Drawing.Point(10, 10)
+    $buttonBack.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBack.Text = "Back to Menu"
+    $buttonBack.BackColor = [System.Drawing.Color]::White
+    $buttonBack.ForeColor = [System.Drawing.Color]::Black
+    $buttonBack.Add_Click({ $form.Close(); $menuForm.Show() })
+
+    $labelUsers = New-Object System.Windows.Forms.Label
+    $labelUsers.Text = "Enter Users (one per line):"
+    $labelUsers.Location = New-Object System.Drawing.Point(10, 50)
+    $labelUsers.Size = New-Object System.Drawing.Size(200, 25)
+    $labelUsers.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxUsers = New-Object System.Windows.Forms.TextBox
+    $textBoxUsers.Location = New-Object System.Drawing.Point(10, 80)
+    $textBoxUsers.Size = New-Object System.Drawing.Size(460, 100)
+    $textBoxUsers.Multiline = $true
+    $textBoxUsers.ScrollBars = "Vertical"
+    $textBoxUsers.BackColor = [System.Drawing.Color]::White
+
+    $labelOU = New-Object System.Windows.Forms.Label
+    $labelOU.Text = "Enter Target OU (distinguished name):"
+    $labelOU.Location = New-Object System.Drawing.Point(10, 190)
+    $labelOU.Size = New-Object System.Drawing.Size(300, 25)
+    $labelOU.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxOU = New-Object System.Windows.Forms.TextBox
+    $textBoxOU.Location = New-Object System.Drawing.Point(10, 220)
+    $textBoxOU.Size = New-Object System.Drawing.Size(460, 25)
+    $textBoxOU.BackColor = [System.Drawing.Color]::White
+
+    $buttonMove = New-Object System.Windows.Forms.Button
+    $buttonMove.Location = New-Object System.Drawing.Point(10, 260)
+    $buttonMove.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonMove.Text = "Move Users"
+    $buttonMove.BackColor = [System.Drawing.Color]::White
+    $buttonMove.ForeColor = [System.Drawing.Color]::Black
+    $buttonMove.Add_Click({
+        $users = $textBoxUsers.Text -split "`r`n"
+        $targetOU = $textBoxOU.Text
+        MoveUsersToOU $users $targetOU $global:domain $global:credentials $resultBox
+    })
+
+    # ResultBox to display operation results
+    $resultBox = New-Object System.Windows.Forms.RichTextBox
+    $resultBox.Location = New-Object System.Drawing.Point(10, 300)
+    $resultBox.Size = New-Object System.Drawing.Size(480, 250)
+    $resultBox.ReadOnly = $true
+    $resultBox.BackColor = [System.Drawing.Color]::White
+    $resultBox.ScrollBars = "Both"
+    $resultBox.WordWrap = $true
+
+    # Adjust components during resizing
+    $form.Add_Resize({
+        $resultBox.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 20, $form.ClientSize.Height - 350)
+        $textBoxUsers.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxUsers.Height)
+        $textBoxOU.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxOU.Height)
+    })
+
+    $form.Controls.AddRange(@($buttonBack, $labelUsers, $textBoxUsers, $labelOU, $textBoxOU, $buttonMove, $resultBox))
+    $form.ShowDialog()
+}
+
+function MoveUsersToOU($users, $targetOU, $domain, $credentials, $resultBox) {
+    foreach ($userName in $users) {
+        if ([string]::IsNullOrWhiteSpace($userName)) {
+            continue # Evita procesar líneas vacías
+        }
+        try {
+            $user = Get-ADUser -Credential $credentials -Identity $userName.Trim() -Properties DistinguishedName -Server $domain
+            if ($user.DistinguishedName -like "*$targetOU*") {
+                $resultBox.AppendText("User $userName is already in the target OU $targetOU`n")
+            } else {
+                Move-ADObject -Credential $credentials -Identity $user.DistinguishedName -TargetPath $targetOU -Server $domain -ErrorAction Stop
+                $resultBox.AppendText("User $userName successfully moved to $targetOU`n")
+            }
+        } catch {
+            $resultBox.AppendText("Error processing user $userName $_`n")
+        }
+    }
+}
+
+function ShowADSGBulkUserWindow($menuForm) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Add SG Bulk Users - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(530, 630)
+    $form.MinimumSize = New-Object System.Drawing.Size(530, 630)
+    $form.MaximumSize = New-Object System.Drawing.Size(530, 630)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $buttonBack = New-Object System.Windows.Forms.Button
+    $buttonBack.Location = New-Object System.Drawing.Point(10, 10)
+    $buttonBack.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBack.Text = "Back to Menu"
+    $buttonBack.BackColor = [System.Drawing.Color]::White
+    $buttonBack.ForeColor = [System.Drawing.Color]::Black
+    $buttonBack.Add_Click({ $form.Close(); $menuForm.Show() })
+
+    $labelUsers = New-Object System.Windows.Forms.Label
+    $labelUsers.Text = "Enter Users (one per line):"
+    $labelUsers.Location = New-Object System.Drawing.Point(10, 50)
+    $labelUsers.Size = New-Object System.Drawing.Size(200, 25)
+    $labelUsers.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxUsers = New-Object System.Windows.Forms.TextBox
+    $textBoxUsers.Location = New-Object System.Drawing.Point(10, 80)
+    $textBoxUsers.Size = New-Object System.Drawing.Size(460, 100)
+    $textBoxUsers.Multiline = $true
+    $textBoxUsers.ScrollBars = "Vertical"
+    $textBoxUsers.BackColor = [System.Drawing.Color]::White
+
+    $labelSG = New-Object System.Windows.Forms.Label
+    $labelSG.Text = "Enter Security Groups (one per line):"
+    $labelSG.Location = New-Object System.Drawing.Point(10, 190)
+    $labelSG.Size = New-Object System.Drawing.Size(300, 25)
+    $labelSG.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxSG = New-Object System.Windows.Forms.TextBox
+    $textBoxSG.Location = New-Object System.Drawing.Point(10, 220)
+    $textBoxSG.Size = New-Object System.Drawing.Size(460, 100)
+    $textBoxSG.Multiline = $true
+    $textBoxSG.ScrollBars = "Vertical"
+    $textBoxSG.BackColor = [System.Drawing.Color]::White
+
+    $buttonAdd = New-Object System.Windows.Forms.Button
+    $buttonAdd.Location = New-Object System.Drawing.Point(10, 330)
+    $buttonAdd.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonAdd.Text = "Add Security Groups"
+    $buttonAdd.BackColor = [System.Drawing.Color]::White
+    $buttonAdd.ForeColor = [System.Drawing.Color]::Black
+    $buttonAdd.Add_Click({
+        $users = $textBoxUsers.Text -split "`r`n"
+        $groups = $textBoxSG.Text -split "`r`n"
+        AddSGToUsers $users $groups $global:domain $global:credentials $resultBox
+    })
+
+    # ResultBox to display operation results
+    $resultBox = New-Object System.Windows.Forms.RichTextBox
+    $resultBox.Location = New-Object System.Drawing.Point(10, 370)
+    $resultBox.Size = New-Object System.Drawing.Size(480, 200)
+    $resultBox.ReadOnly = $true
+    $resultBox.BackColor = [System.Drawing.Color]::White
+    $resultBox.ScrollBars = "Both"
+    $resultBox.WordWrap = $true
+
+    # Adjust components during resizing
+    $form.Add_Resize({
+        $resultBox.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 20, $form.ClientSize.Height - 400)
+        $textBoxUsers.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxUsers.Height)
+        $textBoxSG.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxSG.Height)
+    })
+
+    $form.Controls.AddRange(@($buttonBack, $labelUsers, $textBoxUsers, $labelSG, $textBoxSG, $buttonAdd, $resultBox))
+    $form.ShowDialog()
+}
+
+function AddSGToUsers($users, $groups, $domain, $credentials, $resultBox) {
+    foreach ($userName in $users) {
+        foreach ($groupName in $groups) {
+            try {
+                $user = Get-ADUser -Credential $credentials -Identity $userName.Trim() -Server $domain
+                Add-ADGroupMember -Credential $credentials -Identity $groupName.Trim() -Members $user -Server $domain -ErrorAction Stop
+                $resultBox.AppendText("User $userName successfully added to $groupName`n")
+            } catch {
+                $resultBox.AppendText("Error adding user $userName to $groupName $_`n")
+            }
+        }
+    }
+}
+
+function ShowChangeUPNBulkUserWindow($menuForm) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Change UPN Bulk Users - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(530, 630)
+    $form.MinimumSize = New-Object System.Drawing.Size(530, 630)
+    $form.MaximumSize = New-Object System.Drawing.Size(530, 630)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $buttonBack = New-Object System.Windows.Forms.Button
+    $buttonBack.Location = New-Object System.Drawing.Point(10, 10)
+    $buttonBack.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBack.Text = "Back to Menu"
+    $buttonBack.BackColor = [System.Drawing.Color]::White
+    $buttonBack.ForeColor = [System.Drawing.Color]::Black
+    $buttonBack.Add_Click({ $form.Close(); $menuForm.Show() })
+
+    $labelUsers = New-Object System.Windows.Forms.Label
+    $labelUsers.Text = "Enter Users (one per line):"
+    $labelUsers.Location = New-Object System.Drawing.Point(10, 50)
+    $labelUsers.Size = New-Object System.Drawing.Size(200, 25)
+    $labelUsers.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxUsers = New-Object System.Windows.Forms.TextBox
+    $textBoxUsers.Location = New-Object System.Drawing.Point(10, 80)
+    $textBoxUsers.Size = New-Object System.Drawing.Size(460, 100)
+    $textBoxUsers.Multiline = $true
+    $textBoxUsers.ScrollBars = "Vertical"
+    $textBoxUsers.BackColor = [System.Drawing.Color]::White
+
+    $labelUPN = New-Object System.Windows.Forms.Label
+    $labelUPN.Text = "Enter the new UPN suffix (e.g. sitel.com):"
+    $labelUPN.Location = New-Object System.Drawing.Point(10, 190)
+    $labelUPN.Size = New-Object System.Drawing.Size(300, 25)
+    $labelUPN.ForeColor = [System.Drawing.Color]::White
+    
+    $textBoxUPN = New-Object System.Windows.Forms.TextBox
+    $textBoxUPN.Location = New-Object System.Drawing.Point(10, 220)
+    $textBoxUPN.Size = New-Object System.Drawing.Size(460, 25)
+    $textBoxUPN.BackColor = [System.Drawing.Color]::White
+    $textBoxUPN.ScrollBars = "Horizontal"
+
+    $buttonChangeUPN = New-Object System.Windows.Forms.Button
+    $buttonChangeUPN.Location = New-Object System.Drawing.Point(10, 260)
+    $buttonChangeUPN.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonChangeUPN.Text = "Change UPN"
+    $buttonChangeUPN.BackColor = [System.Drawing.Color]::White
+    $buttonChangeUPN.ForeColor = [System.Drawing.Color]::Black
+    $buttonChangeUPN.Add_Click({
+        $users = $textBoxUsers.Text -split "`r`n"
+        $upnSuffix = $textBoxUPN.Text
+        ChangeUPNForUsers $users $upnSuffix $global:domain $global:credentials $resultBox
+    })
+
+    # ResultBox to display operation results
+    $resultBox = New-Object System.Windows.Forms.RichTextBox
+    $resultBox.Location = New-Object System.Drawing.Point(10, 300)
+    $resultBox.Size = New-Object System.Drawing.Size(480, 250)
+    $resultBox.ReadOnly = $true
+    $resultBox.BackColor = [System.Drawing.Color]::White
+    $resultBox.ScrollBars = "Both"
+    $resultBox.WordWrap = $true
+
+    # Adjust components during resizing
+    $form.Add_Resize({
+        $resultBox.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 20, $form.ClientSize.Height - 350)
+        $textBoxUsers.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxUsers.Height)
+        $textBoxUPN.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxUPN.Height)
+    })
+
+    $form.Controls.AddRange(@($buttonBack, $labelUsers, $textBoxUsers, $labelUPN, $textBoxUPN, $buttonChangeUPN, $resultBox))
+    $form.ShowDialog()
+}
+
+function ChangeUPNForUsers($users, $upnSuffix, $domain, $credentials, $resultBox) {
+    foreach ($username in $users) {
+        try {
+            $newUpn = "$username@$upnSuffix"
+            $user = Get-ADUser -Credential $credentials -Identity $username.Trim() -Server $domain -ErrorAction Stop
+            Set-ADUser -Credential $credentials -Identity $user -UserPrincipalName $newUpn -ErrorAction Stop
+            $resultBox.AppendText("$username UPN successfully updated to $newUpn`n")
+        } catch {
+            $resultBox.AppendText("Error updating UPN for user $username $_`n")
+        }
+    }
+}
+
+function ShowResetPWUBulkUserWindow($menuForm) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Reset PW Bulk Users - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(530, 680)
+    $form.MinimumSize = New-Object System.Drawing.Size(530, 680)
+    $form.MaximumSize = New-Object System.Drawing.Size(530, 680)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $buttonBack = New-Object System.Windows.Forms.Button
+    $buttonBack.Location = New-Object System.Drawing.Point(10, 10)
+    $buttonBack.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBack.Text = "Back to Menu"
+    $buttonBack.BackColor = [System.Drawing.Color]::White
+    $buttonBack.ForeColor = [System.Drawing.Color]::Black
+    $buttonBack.Add_Click({ $form.Close(); $menuForm.Show() })
+
+    $labelUsers = New-Object System.Windows.Forms.Label
+    $labelUsers.Text = "Enter Users (one per line):"
+    $labelUsers.Location = New-Object System.Drawing.Point(10, 50)
+    $labelUsers.Size = New-Object System.Drawing.Size(200, 25)
+    $labelUsers.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxUsers = New-Object System.Windows.Forms.TextBox
+    $textBoxUsers.Location = New-Object System.Drawing.Point(10, 80)
+    $textBoxUsers.Size = New-Object System.Drawing.Size(460, 100)
+    $textBoxUsers.Multiline = $true
+    $textBoxUsers.ScrollBars = "Vertical"
+    $textBoxUsers.BackColor = [System.Drawing.Color]::White
+
+    $checkBoxChangePWNextLogon = New-Object System.Windows.Forms.CheckBox
+    $checkBoxChangePWNextLogon.Text = "User must change password at next logon"
+    $checkBoxChangePWNextLogon.Location = New-Object System.Drawing.Point(10, 190)
+    $checkBoxChangePWNextLogon.Size = New-Object System.Drawing.Size(250, 25)
+    $checkBoxChangePWNextLogon.ForeColor = [System.Drawing.Color]::White
+
+    $buttonResetPWU = New-Object System.Windows.Forms.Button
+    $buttonResetPWU.Location = New-Object System.Drawing.Point(10, 220)
+    $buttonResetPWU.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonResetPWU.Text = "Reset Passwords"
+    $buttonResetPWU.BackColor = [System.Drawing.Color]::White
+    $buttonResetPWU.ForeColor = [System.Drawing.Color]::Black
+    $buttonResetPWU.Add_Click({
+        $users = $textBoxUsers.Text -split "`r`n"
+        $changePWNextLogon = $checkBoxChangePWNextLogon.Checked
+        ResetPWForUsers $users $changePWNextLogon $global:domain $global:credentials $resultBox
+    })
+
+    # ResultBox to display operation results
+    $resultBox = New-Object System.Windows.Forms.RichTextBox
+    $resultBox.Location = New-Object System.Drawing.Point(10, 260)
+    $resultBox.Size = New-Object System.Drawing.Size(480, 320)
+    $resultBox.ReadOnly = $true
+    $resultBox.BackColor = [System.Drawing.Color]::White
+    $resultBox.ScrollBars = "Both"
+    $resultBox.WordWrap = $true
+
+    # Adjust components during resizing
+    $form.Add_Resize({
+        $resultBox.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 20, $form.ClientSize.Height - 250)
+        $textBoxUsers.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxUsers.Height)
+    })
+
+    $form.Controls.AddRange(@($buttonBack, $labelUsers, $textBoxUsers, $checkBoxChangePWNextLogon, $buttonResetPWU, $resultBox))
+    $form.ShowDialog()
+}
+
+function ResetPWForUsers($users, $changePWNextLogon, $domain, $credentials, $resultBox) {
+    foreach ($userName in $users) {
+        try {
+            $user = Get-ADUser -Credential $credentials -Identity $userName.Trim() -Properties EmployeeID, LockedOut -Server $domain
+            if ($user) {
+                $newPassword = "Employee# " + $user.EmployeeID
+                Set-ADAccountPassword -Credential $credentials -Identity $userName.Trim() -Reset -NewPassword (ConvertTo-SecureString -AsPlainText $newPassword -Force) -Server $domain
+                $resultBox.AppendText("Changed password for $userName to $newPassword`n")
+
+                # Verificar si el CheckBox está marcado para habilitar el cambio de contraseña en el próximo inicio de sesión
+                if ($changePWNextLogon) {
+                    Set-ADUser -Credential $credentials -Identity $userName.Trim() -PassThru | Set-ADUser -ChangePasswordAtLogon $true -Server $domain
+                    $resultBox.AppendText("$userName must change password at next logon.`n")
+                }
+
+                if ($user.LockedOut -eq $true) {
+                    Unlock-ADAccount -Credential $credentials -Identity $userName.Trim() -Server $domain
+                    $resultBox.AppendText("$userName was locked and is now unlocked.`n")
+                } else {
+                    $resultBox.AppendText("$userName was not locked.`n")
+                }
+            } else {
+                $resultBox.AppendText("User $userName not found in domain $domain.`n")
+            }
+        } catch {
+            $resultBox.AppendText("Error processing $userName $_`n")
+        }
+    }
+}
+
+function ShowAuditsWindow($menuForm) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Audits - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(500, 400)
+    $form.MinimumSize = New-Object System.Drawing.Size(500, 400)
+    $form.MaximumSize = New-Object System.Drawing.Size(500, 400)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $buttonBack = New-Object System.Windows.Forms.Button
+    $buttonBack.Location = New-Object System.Drawing.Point(10, 10)
+    $buttonBack.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBack.Text = "Back to Menu"
+    $buttonBack.BackColor = [System.Drawing.Color]::White
+    $buttonBack.ForeColor = [System.Drawing.Color]::Black
+    $buttonBack.Add_Click({ $form.Close(); $menuForm.Show() })
+
+    $labelUsers = New-Object System.Windows.Forms.Label
+    $labelUsers.Text = "Enter Users (one per line):"
+    $labelUsers.Location = New-Object System.Drawing.Point(10, 50)
+    $labelUsers.Size = New-Object System.Drawing.Size(200, 25)
+    $labelUsers.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxUsers = New-Object System.Windows.Forms.TextBox
+    $textBoxUsers.Location = New-Object System.Drawing.Point(10, 80)
+    $textBoxUsers.Size = New-Object System.Drawing.Size(460, 200)
+    $textBoxUsers.Multiline = $true
+    $textBoxUsers.ScrollBars = "Vertical"
+    $textBoxUsers.BackColor = [System.Drawing.Color]::White
+
+    $buttonAudit = New-Object System.Windows.Forms.Button
+    $buttonAudit.Location = New-Object System.Drawing.Point(10, 300)
+    $buttonAudit.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonAudit.Text = "Perform Audit"
+    $buttonAudit.BackColor = [System.Drawing.Color]::White
+    $buttonAudit.ForeColor = [System.Drawing.Color]::Black
+    $buttonAudit.Add_Click({
+        $users = $textBoxUsers.Text -split "`r`n"
+        PerformAudit $users $global:domain $global:credentials
+        [System.Windows.Forms.MessageBox]::Show("User information exported to desktop as audit.csv", "Audit Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    })
+
+    # ResultBox for displaying operations (if necessary for this form)
+    # Example of future use or if needed by logic
+    # $resultBox = New-Object System.Windows.Forms.RichTextBox
+    # $resultBox.Location = New-Object System.Drawing.Point(10, 340)
+    # $resultBox.Size = New-Object System.Drawing.Size(480, 200)
+    # $resultBox.ReadOnly = $true
+    # $resultBox.BackColor = [System.Drawing.Color]::White
+    # $resultBox.ScrollBars = "Both"
+    # $resultBox.WordWrap = $true
+
+    # Adjust components during resizing
+    $form.Add_Resize({
+        $textBoxUsers.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 40, $textBoxUsers.Height)
+        # Example resize logic for resultBox if in use:
+        # $resultBox.Size = New-Object System.Drawing.Size($form.ClientSize.Width - 20, $form.ClientSize.Height - 340)
+    })
+
+    $form.Controls.AddRange(@($buttonBack, $labelUsers, $textBoxUsers, $buttonAudit))
+    $form.ShowDialog()
+}
+
+function PerformAudit($users, $domain, $credentials) {
+    $domainController1 = "nac.sitel-world.net"
+    $domainController2 = "sitel-world.net"
+    $outputCSV = [System.IO.Path]::Combine([System.Environment]::GetFolderPath("Desktop"), "audit.csv")
+
+    $userObjects = @()
+
+    foreach ($userName in $users) {
+        try {
+            $userDC1 = Get-ADUser -Credential $credentials -Filter {SamAccountName -eq $userName} -Properties Enabled, DistinguishedName, MemberOf, EmployeeID, EmailAddress, UserPrincipalName, DisplayName -Server $domainController1
+            $userDC2 = Get-ADUser -Credential $credentials -Filter {SamAccountName -eq $userName} -Properties Enabled, DistinguishedName, MemberOf, EmployeeID, EmailAddress, UserPrincipalName, DisplayName -Server $domainController2
+            $allGroupMemberships = ($userDC1.MemberOf + $userDC2.MemberOf) -replace '^CN=([^,]+).+$', '$1' -join ', '
+
+            $combinedUserInfo = [PSCustomObject]@{
+                EmployeeID = $userDC1.EmployeeID
+                DisplayName = $userDC1.DisplayName
+                Username = $userDC1.SamAccountName
+                EmailAddress = $userDC1.EmailAddress
+                UPN = $userDC1.UserPrincipalName
+                OU = $userDC1.DistinguishedName
+                GroupMemberships = $allGroupMemberships
+                Enabled = if ($userDC1.Enabled -ne $null -and $userDC1.Enabled -eq $true) { "Enabled" } else { "Disabled" }
+            }
+
+            $userObjects += $combinedUserInfo
+        } catch {
+            Write-Host "Error processing user $userName $_"
+        }
+    }
+
+    $userObjects | Export-Csv -Path $outputCSV -NoTypeInformation
+    Write-Host "User information exported to $outputCSV"
+}
+
+function ShowGenerateCSVWindow($menuForm) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Generate CSV - Logged in as: $($global:currentUserName)"
+    $form.Size = New-Object System.Drawing.Size(500, 380)
+    $form.MinimumSize = New-Object System.Drawing.Size(500, 380)
+    $form.MaximumSize = New-Object System.Drawing.Size(500, 380)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $buttonBack = New-Object System.Windows.Forms.Button
+    $buttonBack.Location = New-Object System.Drawing.Point(10, 10)
+    $buttonBack.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBack.Text = "Back to Menu"
+    $buttonBack.BackColor = [System.Drawing.Color]::White
+    $buttonBack.ForeColor = [System.Drawing.Color]::Black
+    $buttonBack.Add_Click({ $form.Close(); $menuForm.Show() })
+
+    $labelUsers = New-Object System.Windows.Forms.Label
+    $labelUsers.Text = "Enter Usernames (one per line):"
+    $labelUsers.Location = New-Object System.Drawing.Point(10, 50)
+    $labelUsers.Size = New-Object System.Drawing.Size(200, 25)
+    $labelUsers.ForeColor = [System.Drawing.Color]::White
+
+    $textBoxUsers = New-Object System.Windows.Forms.TextBox
+    $textBoxUsers.Location = New-Object System.Drawing.Point(10, 80)
+    $textBoxUsers.Size = New-Object System.Drawing.Size(460, 150)
+    $textBoxUsers.Multiline = $true
+    $textBoxUsers.ScrollBars = "Vertical"
+    $textBoxUsers.BackColor = [System.Drawing.Color]::White
+
+    $buttonGenerate = New-Object System.Windows.Forms.Button
+    $buttonGenerate.Location = New-Object System.Drawing.Point(10, 240)
+    $buttonGenerate.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonGenerate.Text = "Generate CSV"
+    $buttonGenerate.BackColor = [System.Drawing.Color]::White
+    $buttonGenerate.ForeColor = [System.Drawing.Color]::Black
+    $buttonGenerate.Add_Click({
+        $users = $textBoxUsers.Text -split "`r`n"
+        GenerateCSVForProvision $users $global:domain $global:credentials
+        [System.Windows.Forms.MessageBox]::Show("CSV file generated successfully in desktop.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    })
+
+    $LabelReminder = New-Object System.Windows.Forms.Label
+    $LabelReminder.Text = "Remember to Rename the file with the Requision and Move it to the Provisioning Folder (\\us0145nits01DUOProvisionUsers2)."
+    $LabelReminder.Location = New-Object System.Drawing.Point(10, 280)
+    $LabelReminder.Size = New-Object System.Drawing.Size(460, 50)
+    $LabelReminder.ForeColor = [System.Drawing.Color]::White
+    $LabelReminder.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#002A5E")
+
+    $form.Controls.AddRange(@($buttonBack, $labelUsers, $textBoxUsers, $buttonGenerate, $LabelReminder))
+    $form.ShowDialog()
+}
+
+function GenerateCSVForProvision($users, $domain, $credentials) {
+    $outputFolder = [System.Environment]::GetFolderPath("Desktop")
+    $outputCSV = [System.IO.Path]::Combine($outputFolder, "Duo creation.csv")
+
+    $userObjects = @()
+
+    foreach ($userName in $users) {
+        if ([string]::IsNullOrWhiteSpace($userName)) {
+            continue  # Evitar procesar líneas vacías
+        }
+        try {
+            $user = Get-ADUser -Credential $credentials -Identity $userName.Trim() -Properties DisplayName -Server $domain -ErrorAction Stop
+
+            $userInfo = [PSCustomObject]@{
+                Username = $user.SamAccountName
+                RealName = $user.DisplayName
+                'Phone (must include country code)' = ""
+                EmailAddress = ""
+                Token = ""
+                Status = ""
+                Domain = ""
+                RequesterEmailAddress = ""
+            }
+            $userObjects += $userInfo
+        } catch {
+            Write-Host "Error retrieving information for user $userName $_"
+        }
+    }
+
+    try {
+        $userObjects | Export-Csv -Path $outputCSV -NoTypeInformation -Encoding UTF8
+        [System.Windows.Forms.MessageBox]::Show("CSV file generated successfully at $outputCSV", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    } catch {
+        Write-Host "Error writing CSV: $_"
+        [System.Windows.Forms.MessageBox]::Show("Error generating CSV file.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+}
+
+
+# Función para iniciar el programa, obtener y validar credenciales
+function StartProgram {
+    $credentials = Get-DomainCredentials
+    if ($credentials -and (ValidateCredentials -credentials $credentials)) {
+        $global:currentUserName = $credentials.UserName
+        ShowMainMenu
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("Invalid Credentials. Exiting...", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        exit
+    }
+}
+
+# Iniciar el programa
+StartProgram
+
+# Liberar el Mutex al cerrar el programa
+$mutex.ReleaseMutex()
